@@ -15,9 +15,6 @@ venv/
 .vscode/
 .idea/
 
-# Docker
-.dockerignore
-
 # Jupyter
 .ipynb_checkpoints/
 
