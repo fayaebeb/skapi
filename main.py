@@ -14,8 +14,11 @@ from google_search import google_search
 load_dotenv()
 
 app = FastAPI()
-llm = ChatOpenAI(temperature=0.7, openai_api_key=os.getenv("OPENAI_API_KEY"))
-
+llm = ChatOpenAI(
+    model="gpt-4o",  
+    temperature=1.0,
+    openai_api_key=os.getenv("OPENAI_API_KEY")
+)
 class ChatInput(BaseModel):
     message: str
     useweb: Optional[bool] = False  # 🔘 Toggle for Tavily/Google
@@ -87,7 +90,7 @@ async def chat(input: ChatInput):
         final_output += "\n\n### 社内文書情報:\n\n" + formatted_output_docs
 
     if input.useweb and (google_results or tavily_text):
-        final_output += "\n\n---\nご不明な点がございましたら、以下のアドレスまでお気軽にお問い合わせください。\n" \
+        final_output += "\nご不明な点がございましたら、以下のアドレスまでお気軽にお問い合わせください。\n" \
                         "[future-service-devlopment@tk.pacific.co.jp](mailto:future-service-devlopment@tk.pacific.co.jp)\n"
 
         final_output += "\n\n### オンラインWeb情報:\n"
@@ -97,7 +100,7 @@ async def chat(input: ChatInput):
 
 
         if tavily_text:
-            final_output += "\n---\n" + tavily_text.strip()
+            final_output += "\n" + tavily_text.strip()
 
     return {
         "reply": final_output
