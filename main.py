@@ -14,11 +14,13 @@ from google_search import google_search
 load_dotenv()
 
 app = FastAPI()
+
 llm = ChatOpenAI(
     model="gpt-4o",  
     temperature=1.0,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
+
 class ChatInput(BaseModel):
     message: str
     useweb: Optional[bool] = False  # 🔘 Toggle for Tavily/Google
@@ -47,7 +49,6 @@ async def chat(input: ChatInput):
         formatted_context += format_as_message(unique_docs, mode="openai")
         formatted_output_docs = format_as_message(unique_docs, mode="output")
         docs_content = [doc.page_content for doc in unique_docs]
-
 
     # 2. Optionally retrieve Tavily web results
     tavily_text = ""
@@ -86,13 +87,19 @@ async def chat(input: ChatInput):
     # 6. Format the final response
     final_output = gpt_reply.content.strip()
 
+    # Contact block to use where appropriate
+    contact_line = "\nご不明な点がございましたら、以下のアドレスまでお気軽にお問い合わせください。\n" \
+                   "[future-service-devlopment@tk.pacific.co.jp](mailto:future-service-devlopment@tk.pacific.co.jp)\n"
+
+    # Add internal documents section and contact info if applicable
     if input.usedb and formatted_output_docs:
         final_output += "\n\n### 社内文書情報:\n\n" + formatted_output_docs
+        final_output += contact_line
 
+    # Add web section (with contact info if not already added)
     if input.useweb and (google_results or tavily_text):
-        final_output += "\nご不明な点がございましたら、以下のアドレスまでお気軽にお問い合わせください。\n" \
-                        "[future-service-devlopment@tk.pacific.co.jp](mailto:future-service-devlopment@tk.pacific.co.jp)\n"
-
+        if not (input.usedb and formatted_output_docs):
+            final_output += contact_line
         final_output += "\n\n### オンラインWeb情報:\n"
 
         if google_results:
@@ -106,12 +113,13 @@ async def chat(input: ChatInput):
         "reply": final_output
     }
 
-
-"""return {
-        "reply": gpt_reply,
-        "retrieved_docs": docs_content if input.usedb else [],
-        "formatted_output_docs": formatted_output_docs if input.usedb else None,
-        "used_tavily": input.useweb,
-        "tavily_text": tavily_text if input.useweb else None,
-        "google_results": google_results if input.useweb else None  # ✅ Output only
-    }"""
+"""
+return {
+    "reply": gpt_reply,
+    "retrieved_docs": docs_content if input.usedb else [],
+    "formatted_output_docs": formatted_output_docs if input.usedb else None,
+    "used_tavily": input.useweb,
+    "tavily_text": tavily_text if input.useweb else None,
+    "google_results": google_results if input.useweb else None  # ✅ Output only
+}
+"""
