@@ -132,10 +132,16 @@ from astra_retriever import vector_store
 from uuid import uuid4
 from datetime import datetime
 import json
+import re
 
 class ExtractInput(BaseModel):
     input: str
     session_id: str
+
+def extract_url(text: str) -> str | None:
+    """Extract the first URL from the text if present."""
+    match = re.search(r'https?://\S+', text)
+    return match.group(0) if match else None
 
 @app.post("/skmod")
 async def extract(input: ExtractInput):
@@ -152,14 +158,22 @@ async def extract(input: ExtractInput):
     # Step 2: Generate a unique message ID
     msgid = str(uuid4())
 
-    # Step 3: Attempt to save to Astra DB
+    # Step 3: Check if input has a URL
+    url_in_input = extract_url(input.input)
+
+    # Step 4: Build metadata with URL or session_id
+    metadata = {
+        "msgid": msgid,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if url_in_input:
+        metadata["url"] = url_in_input
+    else:
+        metadata["session_id"] = input.session_id
+
+    # Step 5: Attempt to save to Astra DB
     try:
         if vector_store:
-            metadata = {
-                "msgid": msgid,
-                "session_id": input.session_id,
-                "timestamp": datetime.utcnow().isoformat(),
-            }
             vector_store.add_texts(
                 texts=[structured_result],
                 metadatas=[metadata]
@@ -170,7 +184,7 @@ async def extract(input: ExtractInput):
         print("❌ Error during Astra DB save:", e)
         return {"error": f"❌ Astra DB save failed: {str(e)}"}
 
-    # Step 4: Return formatted confirmation response
+    # Step 6: Return formatted confirmation response
     return {
         "reply": (
             "✅ メッセージを保存しました！ 🎉✨\n\n"
