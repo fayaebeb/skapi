@@ -9,22 +9,22 @@ import os
 from astra_retriever import retriever
 from message_formatter import format_as_message
 from tavily_search import tavily_search
-from google_search import google_search 
+from google_search import google_search
 
 load_dotenv()
 
 app = FastAPI()
 
 llm = ChatOpenAI(
-    model="gpt-4o",  
+    model="gpt-4o",
     temperature=1.0,
     openai_api_key=os.getenv("OPENAI_API_KEY")
 )
 
 class ChatInput(BaseModel):
     message: str
-    useweb: Optional[bool] = False  # 🔘 Toggle for Tavily/Google
-    usedb: Optional[bool] = False  # 🔘 Toggle for Astra retriever
+    useweb: Optional[bool] = False
+    usedb: Optional[bool] = False
 
 def deduplicate_docs(docs):
     unique = []
@@ -38,34 +38,30 @@ def deduplicate_docs(docs):
 
 @app.post("/chat")
 async def chat(input: ChatInput):
-    formatted_context = ""
-    docs_content = []
+    internal_docs_text = ""
+    tavily_text = ""
     formatted_output_docs = ""
 
     # 1. Retrieve internal documents via Astra (if enabled)
     if input.usedb:
         retrieved_docs = retriever.invoke(input.message)
         unique_docs = deduplicate_docs(retrieved_docs)
-        formatted_context += format_as_message(unique_docs, mode="openai")
+        internal_docs_text = format_as_message(unique_docs, mode="openai")
         formatted_output_docs = format_as_message(unique_docs, mode="output")
-        docs_content = [doc.page_content for doc in unique_docs]
 
     # 2. Optionally retrieve Tavily web results
-    tavily_text = ""
     if input.useweb:
         tavily_result = tavily_search(
             query=input.message,
-            search_depth="advanced",
+            search_depth="basic",
             chunks_per_source=3,
             topic="general",
-            max_results=5,
+            max_results=3,
             include_answer=True,
             include_images=False,
             include_raw_content=False
         )
-        tavily_text = tavily_result.get("answer", "")
-        if tavily_text:
-            formatted_context += f"\n\nWeb Results:\n{tavily_text}"
+        tavily_text = tavily_result.get("answer") or ""
 
     # 3. Retrieve Google search results (only used in output, not prompt)
     google_results = []
@@ -75,36 +71,42 @@ async def chat(input: ChatInput):
         except Exception as e:
             google_results = [{"error": str(e)}]
 
-    # 4. Compose final prompt with internal + tavily context (not Google)
-    prompt = f"Context:\n{formatted_context}\n\nQuestion:\n{input.message}\nAnswer:"
+    # 4. Prompt to LLM(internal docs + tavily context (not Google))
+    prompt_parts = []
 
-    # 5. Run the LLM
+    if internal_docs_text:
+        prompt_parts.append("[Internal Documents]\n" + internal_docs_text)
+    if tavily_text:
+        prompt_parts.append("[Web Results]\n" + tavily_text)
+
+    prompt_parts.append(f"[User Question]\n{input.message}\n\n[Answer]")
+
+    final_prompt = "\n\n".join(prompt_parts)
+
+    # 5. Send to LLM
     gpt_reply = llm.invoke([
-        SystemMessage(content=""),
-        HumanMessage(content=prompt)
+        SystemMessage(content=("You are 桜AI, the AI of パシフィックコンサルタンツ株式会社")),
+        HumanMessage(content=final_prompt)
     ])
 
-    # 6. Format the final response
+    # 6. Final output
     final_output = gpt_reply.content.strip()
 
-    # Contact block to use where appropriate
+    # Contact line
     contact_line = "\nご不明な点がございましたら、以下のアドレスまでお気軽にお問い合わせください。\n" \
                    "[future-service-devlopment@tk.pacific.co.jp](mailto:future-service-devlopment@tk.pacific.co.jp)\n"
 
-    # Add internal documents section and contact info if applicable
+    # Append internal docs and contact info
     if input.usedb and formatted_output_docs:
         final_output += "\n\n### 社内文書情報:\n\n" + formatted_output_docs
         final_output += contact_line
 
-    # Add web section (with contact info if not already added)
+    # Append web info
     if input.useweb and (google_results or tavily_text):
-        if not (input.usedb and formatted_output_docs):
-            final_output += contact_line
         final_output += "\n\n### オンラインWeb情報:\n"
 
         if google_results:
             final_output += "\n" + "\n".join(google_results)
-
 
         if tavily_text:
             final_output += "\n" + tavily_text.strip()
@@ -113,6 +115,7 @@ async def chat(input: ChatInput):
         "reply": final_output
     }
 
+
 """
 return {
     "reply": gpt_reply,
@@ -120,6 +123,60 @@ return {
     "formatted_output_docs": formatted_output_docs if input.usedb else None,
     "used_tavily": input.useweb,
     "tavily_text": tavily_text if input.useweb else None,
-    "google_results": google_results if input.useweb else None  # ✅ Output only
+    "google_results": google_results if input.useweb else None
 }
 """
+
+from extractor_agent import run_extraction_agent
+from astra_retriever import vector_store
+from uuid import uuid4
+from datetime import datetime
+import json
+
+class ExtractInput(BaseModel):
+    input: str
+    session_id: str
+
+@app.post("/skmod")
+async def extract(input: ExtractInput):
+    # Step 1: Run the extraction agent
+    structured_result = run_extraction_agent(input.input)
+
+    # ✅ Ensure it's a string
+    if not isinstance(structured_result, str):
+        try:
+            structured_result = json.dumps(structured_result, ensure_ascii=False, indent=2)
+        except Exception:
+            structured_result = str(structured_result)
+
+    # Step 2: Generate a unique message ID
+    msgid = str(uuid4())
+
+    # Step 3: Attempt to save to Astra DB
+    try:
+        if vector_store:
+            metadata = {
+                "msgid": msgid,
+                "session_id": input.session_id,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            vector_store.add_texts(
+                texts=[structured_result],
+                metadatas=[metadata]
+            )
+        else:
+            return {"error": "❌ Astra DB connection is not initialized."}
+    except Exception as e:
+        print("❌ Error during Astra DB save:", e)
+        return {"error": f"❌ Astra DB save failed: {str(e)}"}
+
+    # Step 4: Return formatted confirmation response
+    return {
+        "reply": (
+            "✅ メッセージを保存しました！ 🎉✨\n\n"
+            "📂 抽出データ:\n\n"
+            f"{structured_result}\n\n"
+            "🗑️ このメッセージを削除すると、抽出データも一緒に消えちゃうよ！\n\n"
+            f"MSGID: {msgid}"
+        )
+    }
