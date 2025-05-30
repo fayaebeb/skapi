@@ -20,7 +20,7 @@ try:
         collection_name=ASTRA_DB_COLLECTION,
         autodetect_collection=True
     )
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+#    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
 
 except Exception as e:
     warnings.warn(f"❌ Failed to connect to existing collection: {e}")

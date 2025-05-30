@@ -6,10 +6,12 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from dotenv import load_dotenv
 import os
 
-from astra_retriever import retriever
+#from astra_retriever import retriever
 from message_formatter import format_as_message
 from tavily_search import tavily_search
 from google_search import google_search
+
+from langchain_astradb import AstraDBVectorStore
 
 load_dotenv()
 
@@ -18,13 +20,13 @@ app = FastAPI()
 llm = ChatOpenAI(
     model="gpt-4o",
     temperature=1.0,
-    openai_api_key=os.getenv("OPENAI_API_KEY")
-)
+    )
 
 class ChatInput(BaseModel):
     message: str
-    useweb: Optional[bool] = False
-    usedb: Optional[bool] = False
+    useweb: bool = False
+    usedb: bool = False
+    db: str = "files"
 
 def deduplicate_docs(docs):
     unique = []
@@ -44,10 +46,16 @@ async def chat(input: ChatInput):
 
     # 1. Retrieve internal documents via Astra (if enabled)
     if input.usedb:
-        retrieved_docs = retriever.invoke(input.message)
-        unique_docs = deduplicate_docs(retrieved_docs)
-        internal_docs_text = format_as_message(unique_docs, mode="openai")
-        formatted_output_docs = format_as_message(unique_docs, mode="output")
+        try:
+            db_collection = input.db or os.getenv("ASTRA_DB_COLLECTION", "files")
+            dynamic_retriever = get_vector_store(db_collection).as_retriever(search_kwargs={"k": 3})
+            retrieved_docs = dynamic_retriever.invoke(input.message)
+            unique_docs = deduplicate_docs(retrieved_docs)
+            internal_docs_text = format_as_message(unique_docs, mode="openai")
+            formatted_output_docs = format_as_message(unique_docs, mode="output")
+        except Exception as e:
+            return {"error": f"❌ Failed to retrieve from DB collection '{input.db}': {str(e)}"}
+
 
     # 2. Optionally retrieve Tavily web results
     if input.useweb:
@@ -61,15 +69,15 @@ async def chat(input: ChatInput):
             include_images=False,
             include_raw_content=False
         )
-        tavily_text = tavily_result.get("answer") or ""
+        tavily_text = (tavily_result.get("answer") or "").strip()
 
     # 3. Retrieve Google search results (only used in output, not prompt)
-    google_results = []
+    google_results: List[str] = []
     if input.useweb:
         try:
             google_results = google_search(query=input.message, k=3)
         except Exception as e:
-            google_results = [{"error": str(e)}]
+            google_results = [f"❗️Google Search Error: {str(e)}"]
 
     # 4. Prompt to LLM(internal docs + tavily context (not Google))
     prompt_parts = []
@@ -90,7 +98,7 @@ async def chat(input: ChatInput):
     ])
 
     # 6. Final output
-    final_output = gpt_reply.content.strip()
+    final_output = str(gpt_reply.content).strip()
 
     # Contact line
     contact_line = "\nご不明な点がございましたら、以下のアドレスまでお気軽にお問い合わせください。\n" \
@@ -109,7 +117,7 @@ async def chat(input: ChatInput):
             final_output += "\n" + "\n".join(google_results)
 
         if tavily_text:
-            final_output += "\n" + tavily_text.strip()
+            final_output += "\n" + tavily_text
 
     return {
         "reply": final_output
@@ -134,9 +142,19 @@ from datetime import datetime
 import json
 import re
 
+def get_vector_store(collection: str):
+    return AstraDBVectorStore(
+        token=os.getenv("ASTRA_DB_APPLICATION_TOKEN"),
+        api_endpoint=os.getenv("ASTRA_DB_API_ENDPOINT"),
+        namespace=os.getenv("ASTRA_DB_NAMESPACE"),
+        collection_name=collection,
+        autodetect_collection=True
+    )
+
 class ExtractInput(BaseModel):
     input: str
     session_id: str
+    db: str
 
 def extract_url(text: str) -> str | None:
     """Extract the first URL from the text if present."""
@@ -172,14 +190,15 @@ async def extract(input: ExtractInput):
         metadata["session_id"] = input.session_id
 
     # Step 5: Attempt to save to Astra DB
+
+    db_collection = input.db or os.getenv("ASTRA_DB_COLLECTION", "files")
+
     try:
-        if vector_store:
-            vector_store.add_texts(
-                texts=[structured_result],
-                metadatas=[metadata]
-            )
-        else:
-            return {"error": "❌ Astra DB connection is not initialized."}
+        vector_store = get_vector_store(db_collection)
+        vector_store.add_texts(
+            texts=[structured_result],
+            metadatas=[metadata]
+        )
     except Exception as e:
         print("❌ Error during Astra DB save:", e)
         return {"error": f"❌ Astra DB save failed: {str(e)}"}

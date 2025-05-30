@@ -34,7 +34,7 @@ agent_executor = initialize_agent(
     agent_kwargs={
         "system_message": (
             "You are an information extractor. Your job is to extract structured information from the user's input. "
-            "If the input includes a URL, use the url tool to scrape information. Return only information, not explanations."
+            "If the input includes a URL, use the url tool to scrape site. Return only all information, not explanations."
         )
     }
 )

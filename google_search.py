@@ -1,7 +1,8 @@
 import os
 from langchain_google_community import GoogleSearchAPIWrapper
+from typing import List
 
-def google_search(query: str, k: int = 3):
+def google_search(query: str, k: int = 3) -> List[str]:
     try:
         wrapper = GoogleSearchAPIWrapper(
             google_api_key=os.getenv("GOOGLE_API_KEY"),
