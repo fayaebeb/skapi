@@ -211,6 +211,5 @@ async def extract(input: ExtractInput):
             f"{structured_result}\n\n"
             "🗑️ このメッセージを削除すると、抽出データも一緒に消えちゃうよ！\n\n"
             f"MSGID: {msgid}\n\n"
-            f"DBID: {db_collection}"
         )
     }
