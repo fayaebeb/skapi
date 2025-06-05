@@ -79,23 +79,13 @@ async def chat(input: ChatInput):
         except Exception as e:
             google_results = [f"❗️Google Search Error: {str(e)}"]
 
-    # 4. Prompt to LLM(internal docs + tavily context (not Google))
+    # 4. Construct Structured Prompt with Role-Based Blocks
     prompt_parts = []
-
-    if internal_docs_text:
-        prompt_parts.append("[Internal Documents]\n" + internal_docs_text)
-    if tavily_text:
-        prompt_parts.append("[Web Results]\n" + tavily_text)
-
-    prompt_parts.append(f"[User Question]\n{input.message}\n\n[Answer]")
-
-    final_prompt = "\n\n".join(prompt_parts)
-
-    # 5. Send to LLM
-    gpt_reply = llm.invoke([
-        SystemMessage(content=(
-    "You are 桜AI, the AI of パシフィックコンサルタンツ株式会社. "
-    "If the user needs help beyond the AI's response or wants to consult on individual cases, direct them to the appropriate DX事業推進部 contact.\n\n"
+    
+    system_prompt = (
+    "You are 桜AI, an AI assistant for パシフィックコンサルタンツ株式会社 (PCKK)."
+    "You help answer internal company questions using retrieved internal docs or web results. "
+    "If the user needs help beyond the AI's response or wants to consult on individual cases, direct them to the appropriate DX事業推進部 contact:\n\n"
     "【地方別担当】\n"
     "・北海道：今井\n・東北：谷口\n・北関東：吉川\n・南関東：中央省庁の分野担当に準拠\n"
     "・北陸：札本\n・中部：道端\n・関西：轟\n・中国：保多\n・四国：野添\n・九州：新井\n\n"
@@ -106,9 +96,25 @@ async def chat(input: ChatInput):
     "・国土交通省 - 都市局 / 道路局：札本\n"
     "・国土交通省 - 不動産・建設経済局 / 住宅局：轟\n"
     "・国土交通省 - 航空局 / 北海道局：今井\n"
-    "・総務省：今川\n"
-    "・経済産業省：吉川\n"
-    "・環境省：今井\n")),
+    "・総務省：今川\n・経済産業省：吉川\n・環境省：今井")
+
+    # [Context] section
+    if internal_docs_text:
+        prompt_parts.append("[Context: Internal Documents]\n" + internal_docs_text)
+    if tavily_text:
+        prompt_parts.append("[Context: Web Results]\n" + tavily_text)
+        
+    # [User Question]
+    prompt_parts.append(f"[User Question]\n{input.message}")
+
+    # Final instruction
+    prompt_parts.append("[Answer]")
+
+    final_prompt = "\n\n".join(prompt_parts)
+    
+    # 5. Send to LLM with structured role-based messages
+    gpt_reply = llm.invoke([
+        SystemMessage(content=system_prompt),
         HumanMessage(content=final_prompt)
     ])
 
