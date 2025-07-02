@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List, Optional
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage
 from dotenv import load_dotenv
 import os
 
@@ -22,6 +23,19 @@ class ChatInput(BaseModel):
     useweb: bool = False
     usedb: bool = False
     db: str = "files"
+    hist: Optional[List[dict]] = None
+    
+def convert_hist_to_messages(hist: Optional[List[dict]]) -> List:
+    messages = []
+    if hist:
+        for m in hist:
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                messages.append(AIMessage(content=content))
+    return messages
 
 def deduplicate_docs(docs):
     unique = []
@@ -154,10 +168,11 @@ async def chat(input: ChatInput):
     )
     
     # 5. Send to LLM with structured role-based messages
-    gpt_reply = llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=final_prompt)
-    ])
+    messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+    messages.extend(convert_hist_to_messages(input.hist))  # Add history
+    messages.append(HumanMessage(content=final_prompt))     # Current user input
+    gpt_reply = llm.invoke(messages)
+
 
     # 6. Final output
     final_output = str(gpt_reply.content).strip()
