@@ -23,12 +23,12 @@ class ChatInput(BaseModel):
     useweb: bool = False
     usedb: bool = False
     db: str = "files"
-    hist: Optional[List[dict]] = None
+    history: Optional[List[dict]] = None
     
-def convert_hist_to_messages(hist: Optional[List[dict]]) -> List:
+def convert_history_to_messages(history: Optional[List[dict]]) -> List:
     messages = []
-    if hist:
-        for m in hist:
+    if history:
+        for m in history:
             role = m.get("role")
             content = m.get("content", "")
             if role == "user":
@@ -169,7 +169,7 @@ async def chat(input: ChatInput):
     
     # 5. Send to LLM with structured role-based messages
     messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
-    messages.extend(convert_hist_to_messages(input.hist))  # Add history
+    messages.extend(convert_history_to_messages(input.history))  # Add history
     messages.append(HumanMessage(content=final_prompt))     # Current user input
     gpt_reply = llm.invoke(messages)
 
