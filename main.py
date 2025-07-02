@@ -6,7 +6,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from dotenv import load_dotenv
 import os
 
-#from astra_retriever import retriever
+# from astra_retriever import retriever
 from message_formatter import format_as_message
 from tavily_search import tavily_search
 from google_search import google_search
@@ -16,11 +16,6 @@ from langchain_astradb import AstraDBVectorStore
 load_dotenv()
 
 app = FastAPI()
-
-llm = ChatOpenAI(
-    model="gpt-4o",
-    temperature=1.0,
-    )
 
 class ChatInput(BaseModel):
     message: str
@@ -38,24 +33,65 @@ def deduplicate_docs(docs):
             seen.add(identifier)
     return unique
 
+
+def generate_search_query(user_message: str) -> str:
+    """
+    Ask the LLM to rewrite the user's input into a concise
+    keyword‐rich query for vector search.
+    """
+    llm = ChatOpenAI(
+        model="gpt-4o",
+        temperature=0.1,
+    )
+
+    query_system = SystemMessage(
+        content=(
+            "You are a smart assistant that rewrites user questions "
+            "into concise search queries for an internal knowledge base. "
+            "Focus on keywords and core concepts."
+        )
+    )
+
+    query_user = HumanMessage(
+        content=(
+            f"User asked:\n```{user_message}```\n"
+            "Rewrite this into a brief search query (just a few keywords, no explanation)."
+        )
+    )
+
+    # Make the call
+    response = llm.invoke([query_system, query_user])
+
+    # Check if it's a message object (expected) or a list (error case)
+    if hasattr(response, "content"):
+        if isinstance(response.content, str):
+            return response.content.strip()
+        elif isinstance(response.content, list):
+            # Join list elements into a string
+            return " ".join(str(item) for item in response.content).strip()
+        else:
+            return str(response.content).strip()
+    else:
+        raise ValueError("❌ LLM did not return a valid message object.")
+
 @app.post("/chat")
 async def chat(input: ChatInput):
     internal_docs_text = ""
     tavily_text = ""
     formatted_output_docs = ""
 
-    # 1. Retrieve internal documents via Astra (if enabled)
     if input.usedb:
         try:
+            search_query = generate_search_query(input.message)
             db_collection = input.db or os.getenv("ASTRA_DB_COLLECTION", "files")
-            dynamic_retriever = get_vector_store(db_collection).as_retriever(search_kwargs={"k": 3})
-            retrieved_docs = dynamic_retriever.invoke(input.message)
+            retriever = get_vector_store(db_collection)\
+                            .as_retriever(search_kwargs={"k": 3})
+            retrieved_docs = retriever.invoke(search_query)
             unique_docs = deduplicate_docs(retrieved_docs)
             internal_docs_text = format_as_message(unique_docs, mode="openai")
             formatted_output_docs = format_as_message(unique_docs, mode="output")
         except Exception as e:
-            return {"error": f"❌ Failed to retrieve from DB collection '{input.db}': {str(e)}"}
-
+            return {"error": f"❌ DB retrieval failed: {e}"}
 
     # 2. Optionally retrieve Tavily web results
     if input.useweb:
@@ -112,6 +148,11 @@ async def chat(input: ChatInput):
 
     final_prompt = "\n\n".join(prompt_parts)
     
+    llm = ChatOpenAI(
+        model="gpt-4o",
+        temperature=1.0
+    )
+    
     # 5. Send to LLM with structured role-based messages
     gpt_reply = llm.invoke([
         SystemMessage(content=system_prompt),
@@ -157,11 +198,11 @@ return {
 """
 
 from extractor_agent import run_extraction_agent
-from astra_retriever import vector_store
 from uuid import uuid4
 from datetime import datetime
 import json
 import re
+#from astra_retriever import vector_store
 
 def get_vector_store(collection: str):
     return AstraDBVectorStore(
